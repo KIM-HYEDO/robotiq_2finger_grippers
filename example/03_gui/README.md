@@ -10,7 +10,7 @@ Simulation:
 roslaunch robotiq_2f_gripper_examples gripper_gui.launch sim:=true
 ```
 
-Real gripper:
+Real gripper (see [Tutorial 4](../04_real_gripper) for the safety checklist):
 
 ```bash
 roslaunch robotiq_2f_gripper_examples gripper_gui.launch comport:=/dev/ttyUSB0

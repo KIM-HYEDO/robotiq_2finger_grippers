@@ -25,6 +25,7 @@ The examples are the ROS package `robotiq_2f_gripper_examples`, so `roslaunch` a
 | 1 | [`01_sim_quickstart`](01_sim_quickstart) | Start the action server and see the gripper move in RViz |
 | 2 | [`02_python_client`](02_python_client) | Send goals from Python: raw goals, helper functions, feedback |
 | 3 | [`03_gui`](03_gui) | Open/close the gripper with a small Tkinter GUI |
+| 4 | [`04_real_gripper`](04_real_gripper) | Connect to a real gripper, check the link and grasp an object |
 
 Follow them in order. Each folder has its own README.
 

@@ -1,0 +1,36 @@
+<!-- Real Robotiq 2F gripper over USB (Modbus RTU): action server + optional RViz.
+     The gripper activates when the server starts, so keep its fingers clear of obstacles.
+     Usage: roslaunch robotiq_2f_gripper_examples real_gripper.launch comport:=/dev/ttyUSB0 [stroke:=0.140] -->
+<launch>
+    <arg name="comport" default="/dev/ttyUSB0" doc="Serial port of the gripper, find it with `dmesg | grep tty`"/>
+    <arg name="baud" default="115200" doc="Must match the baud rate configured on the gripper"/>
+    <arg name="stroke" default="0.085" doc="Gripper stroke [m]: 0.085 (2F-85) or 0.140 (2F-140)"/>
+    <arg name="rviz" default="true" doc="Show the gripper model in RViz"/>
+
+    <!-- Action server: advertises /command_robotiq_action and publishes /joint_states -->
+    <include file="$(find robotiq_2f_gripper_control)/launch/robotiq_action_server.launch">
+        <arg name="comport" value="$(arg comport)"/>
+        <arg name="baud" value="$(arg baud)"/>
+        <arg name="stroke" value="$(arg stroke)"/>
+        <arg name="joint_name" value="finger_joint"/>
+        <arg name="verbose" value="true"/>
+        <arg name="sim" value="false"/>
+    </include>
+
+    <group if="$(arg rviz)">
+        <param name="robot_description"
+               command="$(find xacro)/xacro $(find robotiq_2f_85_gripper_visualization)/urdf/robotiq_arg2f_85_model.xacro"/>
+
+        <node name="robot_state_publisher" pkg="robot_state_publisher" type="robot_state_publisher">
+            <param name="publish_frequency" type="double" value="100.0"/>
+        </node>
+
+        <node name="gripper_joint_state_publisher" pkg="joint_state_publisher" type="joint_state_publisher">
+            <rosparam param="source_list">[/joint_states]</rosparam>
+            <rosparam param="use_gui">false</rosparam>
+        </node>
+
+        <node name="rviz" pkg="rviz" type="rviz"
+              args="-d $(find robotiq_2f_85_gripper_visualization)/visualize.rviz"/>
+    </group>
+</launch>

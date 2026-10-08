@@ -10,4 +10,6 @@ catkin_install_python(PROGRAMS
   02_python_client/02_helpers.py
   02_python_client/03_feedback.py
   03_gui/robotiq_2f_gripper_gui.py
+  04_real_gripper/check_connection.py
+  04_real_gripper/grasp_object.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
