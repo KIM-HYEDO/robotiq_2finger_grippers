@@ -73,6 +73,7 @@ private:
   std::unique_ptr<ros::AsyncSpinner> spinner_;
   ros::Subscriber joint_state_sub_;
   std::unique_ptr<Client> client_;
+  ros::WallTime connect_time_;  // when client_ was created, to retry a connection that never comes up
   std::string action_name_;
   std::string joint_name_;
   double stroke_;  // [m] 0.085 for the 2F-85, 0.140 for the 2F-140

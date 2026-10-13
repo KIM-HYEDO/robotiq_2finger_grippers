@@ -20,6 +20,7 @@ const int SPEED_MIN_MM_S = 13;
 const int SPEED_MAX_MM_S = 100;
 const int FORCE_MIN = 0;
 const int FORCE_MAX = 100;
+const double RECONNECT_SECONDS = 10.0;
 }  // namespace
 
 GripperPanel::GripperPanel(QWidget* parent)
@@ -106,7 +107,8 @@ void GripperPanel::load(const rviz::Config& config)
   if (config.mapGetString("action_name", &name) && !name.isEmpty())
   {
     action_name_edit_->setText(name);
-    connectToServer(name.toStdString());
+    if (name.toStdString() != action_name_)
+      connectToServer(name.toStdString());
   }
   float value;
   if (config.mapGetFloat("speed", &value))
@@ -132,10 +134,13 @@ void GripperPanel::save(rviz::Config config) const
 
 void GripperPanel::connectToServer(const std::string& action_name)
 {
-  client_.reset();
+  // The client spins its own thread, so the panel never blocks on the server. It is created before the
+  // old one goes away: with the same action name the goal and cancel topics then stay advertised and a
+  // server that is already subscribed keeps its connection instead of racing a re-advertisement.
+  std::unique_ptr<Client> client(new Client(nh_, action_name, true));
+  client_ = std::move(client);
   action_name_ = action_name;
-  // The client spins its own thread, so the panel never blocks on the server
-  client_.reset(new Client(nh_, action_name_, true));
+  connect_time_ = ros::WallTime::now();
   std::lock_guard<std::mutex> lock(mutex_);
   was_connected_ = false;
   goal_width_ = -1.0;
@@ -220,7 +225,15 @@ void GripperPanel::refresh()
   speed_label_->setText(QString("Speed: %1 m/s").arg(speed_slider_->value() / 1000.0, 0, 'f', 3));
   force_label_->setText(QString("Force: %1 %").arg(force_slider_->value()));
 
-  const bool connected = client_ && client_->isServerConnected();
+  bool connected = client_ && client_->isServerConnected();
+  // A client that has not connected for a while is recreated: actionlib can miss a server that came up
+  // while the goal/cancel topics were being re-advertised, and a fresh client always reconnects.
+  if (!connected && (ros::WallTime::now() - connect_time_).toSec() > RECONNECT_SECONDS)
+  {
+    ROS_DEBUG("Gripper panel: no action server \"%s\" yet, reconnecting", action_name_.c_str());
+    connectToServer(action_name_);
+    connected = client_->isServerConnected();
+  }
   QString text;
   {
     std::lock_guard<std::mutex> lock(mutex_);
