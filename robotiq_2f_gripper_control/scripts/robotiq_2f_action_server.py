@@ -16,6 +16,8 @@ Parameters:
     joint_name: Name of the URDF gripper actuated joints to publish on the `/joint_state` topic 
     sim: Boolean indicating whether to use a simulated gripper or try to connect to a real one.
     rate: Frequency in Herz to update the gripper variables (command, joint_state, gripper_state)
+    trajectory_force: Force [0-100] for FollowJointTrajectory goals without effort, e.g. from MoveIt (default 50)
+    trajectory_speed: Speed [m/s] for FollowJointTrajectory goals without a duration (default 0.1)
 
 @author: Daniel Felipe Ordonez Apraez
 @email: daniels.ordonez@gmail.com
@@ -27,6 +29,8 @@ from control_msgs.msg import FollowJointTrajectoryAction, FollowJointTrajectoryR
 from robotiq_2f_gripper_msgs.msg import CommandRobotiqGripperFeedback, CommandRobotiqGripperResult, CommandRobotiqGripperAction, CommandRobotiqGripperGoal
 
 GOAL_DETECTION_THRESHOLD = 0.003 # [m] Max deviation from target goal to consider as goal "reached"
+MIN_SPEED = 0.013 # [m/s] Speed limits of the gripper, same as in the driver
+MAX_SPEED = 0.1   # [m/s]
 
 class CommandGripperActionServer(object):
 
@@ -108,15 +112,20 @@ class CommandGripperActionServer(object):
       self._is_stalled = False 
     
     def execute_joint_trajectory_cb(self, goal):
+      """
+      FollowJointTrajectory interface used by MoveIt. Only the last trajectory point is sent to the gripper:
+      its position is the target, the speed is chosen so that the gripper arrives in the planned time
+      (MoveIt velocity scaling is therefore respected) and the force is the point's effort if given,
+      otherwise the `~trajectory_force` parameter.
+      """
       rospy.loginfo("Trajectory received with %d points", len(goal.trajectory.points))
       feedback = FollowJointTrajectoryFeedback()
       result = FollowJointTrajectoryResult()
-      current_status = self._driver.get_current_gripper_status()
 
       # Check trajectory joint names
       joint_names = goal.trajectory.joint_names
-      if len(joint_names) != 1 and joint_names[0] != self._driver._joint_name :
-        msg = "Joint trajectory joints do not match gripper joint"
+      if len(joint_names) != 1 or joint_names[0] != self._driver._joint_name:
+        msg = "Joint trajectory joints %s do not match gripper joint %s" % (list(joint_names), self._driver._joint_name)
         rospy.logerr(msg)
         result.error_code = result.INVALID_JOINTS
         result.error_string = msg
@@ -124,86 +133,116 @@ class CommandGripperActionServer(object):
         return
       # Check trajectory points
       if len(goal.trajectory.points) == 0:
-        msg = "Ignoring empty trajectory "
+        msg = "Ignoring empty trajectory"
         rospy.logerr(msg)
         result.error_code = result.INVALID_GOAL
         result.error_string = msg
         self._joint_trajectory_action_server.set_aborted(result)
-        return 
-      
-      # Process goal trajectory
-      self._processing_goal = True  
-      self._is_stalled = False
-
-      goal_command = CommandRobotiqGripperGoal()
-      feedback.joint_names = goal.trajectory.joint_names      
-      watchdog = rospy.Timer(rospy.Duration(goal.trajectory.points[-1].time_from_start.to_sec() + 0.5), 
-                              self._execution_timeout, 
-                              oneshot=True)
-
-      # Follow trajectory points
+        return
       goal_trajectory_point = goal.trajectory.points[-1]
-      
-      # Validate trajectory point
       if len(goal_trajectory_point.positions) != 1:
+        msg = "Invalid joint position on trajectory point"
+        rospy.logerr(msg)
         result.error_code = result.INVALID_GOAL
-        result.error_string = "Invalid joint position on trajectory point "
+        result.error_string = msg
         self._joint_trajectory_action_server.set_aborted(result)
         return
-      target_speed = goal_trajectory_point.velocities[0] if len(goal_trajectory_point.velocities) > 0 else 0.01
-      target_force = goal_trajectory_point.effort[0] if len(goal_trajectory_point.effort) > 0 else 0.1
+
+      # Target [m], speed [m/s] to arrive in the planned time, force [%]
+      goal_command = CommandRobotiqGripperGoal()
       goal_command.position = self._driver.from_radians_to_distance(goal_trajectory_point.positions[0])
-      goal_command.speed = abs(target_speed) # To-Do: Convert to rad/s
-      goal_command.force = target_force
+      distance = abs(goal_command.position - self._driver.get_current_gripper_status().position)
+      duration = goal_trajectory_point.time_from_start.to_sec()
+      if duration > 0.0:
+        goal_command.speed = max(MIN_SPEED, min(MAX_SPEED, distance / duration))
+      else:
+        goal_command.speed = rospy.get_param('~trajectory_speed', MAX_SPEED)
+      if len(goal_trajectory_point.effort) > 0:
+        goal_command.force = goal_trajectory_point.effort[0]
+      else:
+        goal_command.force = rospy.get_param('~trajectory_force', 50.0)
+      # Time the gripper may take: the expected time at the commanded speed plus a margin
+      timeout = 1.5 * distance / max(goal_command.speed, MIN_SPEED) + 1.0
+      # GOAL_DETECTION_THRESHOLD is in meters, the feedback error below is in radians
+      goal_threshold = abs(self._driver.from_distance_to_radians(0.0) - self._driver.from_distance_to_radians(GOAL_DETECTION_THRESHOLD))
+      rospy.logdebug("Gripper target %.3f m, speed %.3f m/s, force %.0f, timeout %.1f s", goal_command.position, goal_command.speed, goal_command.force, timeout)
+
       # Send incoming command to gripper driver
       self._driver.update_gripper_command(goal_command)
-      # Set feedback desired value 
+      self._processing_goal = True
+      self._is_stalled = False
+      watchdog = rospy.Timer(rospy.Duration(timeout), self._execution_timeout, oneshot=True)
+
+      feedback.joint_names = goal.trajectory.joint_names
       feedback.desired.positions = [goal_trajectory_point.positions[0]]
-      
-      while not rospy.is_shutdown() and self._processing_goal and not self._is_stalled:  
-        current_status = self._driver.get_current_gripper_status()          
+      rate = rospy.Rate(rospy.get_param('~rate', 30))
+
+      while not rospy.is_shutdown() and self._processing_goal and not self._is_stalled:
+        # Preempted (new goal or cancel from MoveIt): stop the gripper where it is
+        if self._joint_trajectory_action_server.is_preempt_requested():
+          watchdog.shutdown()
+          goal_command.stop = True
+          goal_command.position = self._driver.get_current_gripper_status().position
+          self._driver.update_gripper_command(goal_command)
+          self._processing_goal = False
+          self._joint_trajectory_action_server.set_preempted(result, "Trajectory preempted, gripper stopped")
+          return
+
+        current_status = self._driver.get_current_gripper_status()
         feedback.actual.positions = [self._driver.get_current_joint_position()]
         error = abs(feedback.actual.positions[0] - feedback.desired.positions[0])
-        rospy.logdebug("Error : %.3f -- Actual: %.3f -- Desired: %.3f", error, self._driver.get_current_joint_position(), feedback.desired.positions[0])           
-
         feedback.error.positions = [error]
-        self._joint_trajectory_action_server.publish_feedback( feedback )
-        
+        self._joint_trajectory_action_server.publish_feedback(feedback)
+
         # Check for errors
-        if current_status.fault_status != 0 and not self._is_stalled:              
-          self._is_stalled = True
-          self._processing_goal = False 
+        if current_status.fault_status != 0:
+          watchdog.shutdown()
+          self._processing_goal = False
+          msg = "Gripper fault status (gFLT): %d" % current_status.fault_status
           rospy.logerr(msg)
-          result.error_code = -6
-          result.error_string = "Gripper fault status (gFLT): " + current_status.fault_status
+          result.error_code = result.GOAL_TOLERANCE_VIOLATED
+          result.error_string = msg
           self._joint_trajectory_action_server.set_aborted(result)
           return
         # Check if object was detected
-        if current_status.obj_detected:     
-          watchdog.shutdown()                         # Stop timeout watchdog.
-          self._processing_goal = False 
-          self._is_stalled = False
-          result.error_code = result.SUCCESSFUL          
-          result.error_string = "Object detected/grasped" 
-          self._joint_trajectory_action_server.set_succeeded(result)  
+        if current_status.obj_detected:
+          watchdog.shutdown()
+          self._processing_goal = False
+          result.error_code = result.SUCCESSFUL
+          result.error_string = "Object detected/grasped"
+          self._joint_trajectory_action_server.set_succeeded(result)
           return
-        # Check if current trajectory point was reached 
-        if error < GOAL_DETECTION_THRESHOLD :      
+        # Check if the target was reached
+        if error < goal_threshold:
           break
-        
-      # Entire trajectory was followed/reached
-      watchdog.shutdown() 
-     
-      rospy.logdebug(self._action_name + ": goal reached")
-      result.error_code = result.SUCCESSFUL          
-      result.error_string = "Goal reached" 
-      self._joint_trajectory_action_server.set_succeeded(result)  
+        rate.sleep()
 
-      self._processing_goal = False 
-      self._is_stalled = False 
+      # Let the gripper settle on the target. Bounded, so a position slightly off is still a success.
+      settle_deadline = rospy.get_time() + 0.5
+      while (not rospy.is_shutdown() and not self._is_stalled and rospy.get_time() < settle_deadline
+             and self._driver.get_current_gripper_status().is_moving):
+        rate.sleep()
+
+      watchdog.shutdown()
+      if rospy.is_shutdown():
+        return
+      if self._is_stalled:
+        msg = "Gripper did not reach %.3f m within %.1f s" % (goal_command.position, timeout)
+        rospy.logerr(msg)
+        result.error_code = result.GOAL_TOLERANCE_VIOLATED
+        result.error_string = msg
+        self._joint_trajectory_action_server.set_aborted(result)
+      else:
+        rospy.logdebug(self._action_name + ": goal reached")
+        result.error_code = result.SUCCESSFUL
+        result.error_string = "Goal reached"
+        self._joint_trajectory_action_server.set_succeeded(result)
+
+      self._processing_goal = False
+      self._is_stalled = False
 
     def _execution_timeout(self, event):
-        rospy.logerr("%s: Achieving goal is taking too long, dropping current goal")
+        rospy.logerr("%s: Achieving goal is taking too long, dropping current goal", self._action_name)
         self._is_stalled = True
         self._processing_goal = False
 

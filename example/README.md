@@ -45,6 +45,25 @@ advertised as `command_robotiq_action`.
 Feedback and result share the same fields: `position`, `requested_position`, `is_moving`,
 `obj_detected`, `fault_status`, `is_ready`, `is_reset`, `current`.
 
+## Using the gripper from MoveIt
+
+The action server also offers `robotiq_controller/follow_joint_trajectory`
+(`control_msgs/FollowJointTrajectoryAction`) for `finger_joint`, so MoveIt can drive the gripper like any
+other controller. Add it to the `controller_list` of the MoveIt simple controller manager:
+
+```yaml
+- name: robotiq_controller
+  action_ns: follow_joint_trajectory
+  type: FollowJointTrajectory
+  default: True
+  joints: [finger_joint]
+```
+
+Only the last point of a trajectory is used: its position is the target, the speed is chosen so that the
+gripper arrives in the planned time (MoveIt velocity scaling applies) and the force is the point's effort
+if given, otherwise the `~trajectory_force` parameter of the action server (default 50 %). Cancelling the
+trajectory stops the gripper.
+
 ## Simulation limits
 
 The simulated gripper only models finger motion. It never reports `obj_detected`, and it ignores
