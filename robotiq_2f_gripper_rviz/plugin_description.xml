@@ -1,0 +1,9 @@
+<library path="lib/librobotiq_2f_gripper_rviz">
+  <class name="robotiq_2f_gripper_rviz/GripperPanel"
+         type="robotiq_2f_gripper_rviz::GripperPanel"
+         base_class_type="rviz::Panel">
+    <description>
+      Open and close a Robotiq 2F gripper through its action server: speed and force sliders, OPEN, CLOSE, STOP and status.
+    </description>
+  </class>
+</library>

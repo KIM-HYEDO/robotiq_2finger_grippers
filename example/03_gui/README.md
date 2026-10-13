@@ -37,3 +37,9 @@ The launch file (`example/03_gui/gripper_gui.launch`) starts the action server a
 
 The script is `example/03_gui/robotiq_2f_gripper_gui.py`. It needs the `tkinter`
 package (`sudo apt install python3-tk`) and a display.
+
+## The same controls inside RViz
+
+The package [`robotiq_2f_gripper_rviz`](../../robotiq_2f_gripper_rviz) provides these controls as an RViz
+panel (plus a STOP button): **Panels > Add New Panel > robotiq_2f_gripper_rviz > GripperPanel**. Handy when
+the gripper sits on a robot arm that is already shown in RViz.

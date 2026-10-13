@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>robotiq_2f_gripper_rviz</name>
+  <version>0.0.1</version>
+  <description>RViz panel to open and close a Robotiq 2F gripper through its action server</description>
+
+  <maintainer email="hyesine1107@gmail.com">KIM-HYEDO</maintainer>
+
+  <license>BSD</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <depend>actionlib</depend>
+  <depend>pluginlib</depend>
+  <depend>qtbase5-dev</depend>
+  <depend>robotiq_2f_gripper_msgs</depend>
+  <depend>roscpp</depend>
+  <depend>rviz</depend>
+  <depend>sensor_msgs</depend>
+
+  <export>
+    <rviz plugin="${prefix}/plugin_description.xml"/>
+  </export>
+</package>
